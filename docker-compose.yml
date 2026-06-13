@@ -1,0 +1,28 @@
+services:
+  reddit-viewer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: reddit-viewer
+    ports:
+      - "4444:4444"
+    environment:
+      - REDDIT_CLIENT_ID=${REDDIT_CLIENT_ID:-}
+      - REDDIT_CLIENT_SECRET=${REDDIT_CLIENT_SECRET:-}
+    volumes:
+      # Mount .env file if it exists (optional)
+      - ./.env:/app/.env:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4444/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - reddit-viewer-network
+
+networks:
+  reddit-viewer-network:
+    driver: bridge
+

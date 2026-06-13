@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reddit Image/GIF Viewer</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎨 Reddit Image/GIF Viewer</h1>
+            <p>Fast & Lightweight Media Browser</p>
+        </div>
+        
+        <button class="help-btn" id="helpBtn" title="Keyboard Shortcuts (?)" aria-label="Show keyboard shortcuts help" role="button" tabindex="0">?</button>
+        
+        <form class="search-form" id="searchForm" role="search" aria-label="Search Reddit media">
+            <div class="form-group">
+                <label for="sourceType" aria-label="Source Type">Source Type</label>
+                <select id="sourceType" name="source_type" required aria-label="Select source type">
+                    <option value="subreddit">Subreddit</option>
+                    <option value="user">User</option>
+                </select>
+            </div>
+            
+            <div class="form-group" id="sourceGroup">
+                <label for="source">Source Name</label>
+                <div class="autocomplete-container" id="autocompleteContainer" style="display: none;">
+                    <div class="subreddit-tags" id="subredditTags"></div>
+                    <div class="subreddit-input-wrapper">
+                        <input 
+                            type="text" 
+                            id="autocompleteInput" 
+                            class="autocomplete-input" 
+                            placeholder="Start typing to search subreddits (works with 1+ characters)..."
+                            autocomplete="off"
+                        >
+                        <div class="autocomplete-dropdown" id="autocompleteDropdown"></div>
+                    </div>
+                    <input type="hidden" id="source" name="source">
+                </div>
+                <input type="text" id="sourceInput" placeholder="e.g., username or u/username" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="sort">Sort By</label>
+                <select id="sort" name="sort">
+                    <option value="hot">Hot</option>
+                    <option value="top">Top</option>
+                    <option value="new">New</option>
+                    <option value="rising">Rising</option>
+                </select>
+            </div>
+            
+            <div class="form-group" id="timeFilterGroup" style="display: none;">
+                <label for="timeFilter">Time Period</label>
+                <select id="timeFilter" name="time_filter">
+                    <option value="all">All Time</option>
+                    <option value="year">Past Year</option>
+                    <option value="month">Past Month</option>
+                    <option value="week">Past Week</option>
+                    <option value="day">Past 24 Hours</option>
+                    <option value="hour">Past Hour</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label>Grid Size</label>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <button type="button" class="grid-size-btn" data-size="compact" title="Compact">⊞</button>
+                    <button type="button" class="grid-size-btn active" data-size="normal" title="Normal">⊞</button>
+                    <button type="button" class="grid-size-btn" data-size="large" title="Large">⊞</button>
+                </div>
+            </div>
+            
+            <button type="submit" class="btn">Search</button>
+        </form>
+        
+        <div class="error" id="error">
+            <button class="error-close" id="errorClose" title="Close">&times;</button>
+            <div class="error-content">
+                <div class="error-message">
+                    <div class="error-type" id="errorType"></div>
+                    <div class="error-title" id="errorTitle"></div>
+                    <div class="error-details" id="errorDetails"></div>
+                </div>
+                <div class="error-actions" id="errorActions"></div>
+            </div>
+        </div>
+        <div class="loading" id="loading">
+            <div>Loading media...</div>
+            <div class="progress-bar-container" id="progressBarContainer" style="display: none;">
+                <div class="progress-bar" id="progressBar"></div>
+            </div>
+            <div class="progress-text" id="progressText"></div>
+        </div>
+        <div class="stats" id="stats"></div>
+        <div class="grid" id="grid"></div>
+        <div id="scrollSentinel" class="scroll-sentinel" aria-hidden="true"></div>
+        <div class="loading-more" id="loadingMore">Loading more...</div>
+    </div>
+    
+    <button class="dark-mode-toggle" id="darkModeToggle" title="Toggle Dark Mode" aria-label="Toggle dark mode" role="button" tabindex="0">🌙</button>
+    
+    <div id="modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle" aria-describedby="modalDescription">
+        <span class="close" aria-label="Close modal" role="button" tabindex="0">&times;</span>
+        <div class="modal-actions" id="modalActions">
+            <button class="modal-action-btn" id="downloadBtn" title="Download (D)">⬇️ Download</button>
+            <button class="modal-action-btn" id="favoriteBtn" title="Favorite (F)">⭐ Favorite</button>
+            <button class="modal-action-btn" id="fullscreenBtn" title="Fullscreen (F11)">⛶ Fullscreen</button>
+        </div>
+        <div class="modal-content" id="modalContent">
+            <div class="video-controls-overlay" id="videoControls" style="display: none;">
+                <div class="speed-control">
+                    <label>Speed:</label>
+                    <select id="playbackSpeed">
+                        <option value="0.25">0.25x</option>
+                        <option value="0.5">0.5x</option>
+                        <option value="0.75">0.75x</option>
+                        <option value="1" selected>1x</option>
+                        <option value="1.25">1.25x</option>
+                        <option value="1.5">1.5x</option>
+                        <option value="2">2x</option>
+                    </select>
+                </div>
+            </div>
+            <div class="clickable-area prev" id="prevClickArea"></div>
+            <div class="modal-media-container" id="modalMediaContainer"></div>
+            <div class="clickable-area next" id="nextClickArea"></div>
+            <div class="nav-arrow prev" id="prevArrow">&#10094;</div>
+            <div class="nav-arrow next" id="nextArrow">&#10095;</div>
+            <div class="modal-bottom-controls">
+                <div class="gallery-info" id="galleryInfo"></div>
+                <button class="modal-info-toggle" id="modalInfoToggle" title="Toggle Image Info" aria-label="Toggle image information panel" role="button" tabindex="0">ℹ️</button>
+            </div>
+            <div class="modal-info-panel" id="modalInfoPanel">
+                <div class="modal-info-content">
+                    <div class="modal-info-row">
+                        <span class="modal-info-label">Title:</span>
+                        <span class="modal-info-value" id="modalInfoTitle">-</span>
+                    </div>
+                    <div class="modal-info-row">
+                        <span class="modal-info-label">Subreddit:</span>
+                        <span class="modal-info-value" id="modalInfoSubreddit">-</span>
+                    </div>
+                    <div class="modal-info-row">
+                        <span class="modal-info-label">Author:</span>
+                        <span class="modal-info-value" id="modalInfoAuthor">-</span>
+                    </div>
+                    <div class="modal-info-row">
+                        <span class="modal-info-label">Score:</span>
+                        <span class="modal-info-value" id="modalInfoScore">-</span>
+                    </div>
+                    <div class="modal-info-row">
+                        <span class="modal-info-label">Dimensions:</span>
+                        <span class="modal-info-value" id="modalInfoDimensions">-</span>
+                    </div>
+                    <div class="modal-info-row">
+                        <span class="modal-info-label">URL:</span>
+                        <span class="modal-info-value" id="modalInfoUrl" style="word-break: break-all; font-size: 11px;">-</span>
+                    </div>
+                    <div class="modal-info-actions">
+                        <button class="modal-info-btn" id="modalInfoCopyUrl">📋 Copy URL</button>
+                        <a class="modal-info-btn" id="modalInfoOpenReddit" target="_blank" rel="noopener noreferrer">🔗 Open in Reddit</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="keyboard-hint" id="keyboardHint">
+        <strong>Keyboard Shortcuts:</strong><br>
+        <kbd>←</kbd>/<kbd>→</kbd> Navigate<br>
+        <kbd>Space</kbd> Next Image<br>
+        <kbd>D</kbd> Download<br>
+        <kbd>F</kbd> Favorite<br>
+        <kbd>F11</kbd> Fullscreen<br>
+        <kbd>Esc</kbd> Close
+    </div>
+    
+    <div class="shortcuts-legend" id="shortcutsLegend">
+        <div class="shortcuts-legend-content">
+            <div class="shortcuts-legend-header">
+                <h2>⌨️ Keyboard Shortcuts</h2>
+                <button class="shortcuts-legend-close" id="shortcutsLegendClose">&times;</button>
+            </div>
+            
+            <div class="shortcuts-section">
+                <h3>🔍 Search & Navigation</h3>
+                <table class="shortcuts-table">
+                    <tr>
+                        <td>
+                            <div class="key-combo">
+                                <kbd>/</kbd>
+                            </div>
+                        </td>
+                        <td>Focus search input</td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <div class="key-combo">
+                                <kbd>?</kbd>
+                            </div>
+                        </td>
+                        <td>Show/hide this help dialog</td>
+                    </tr>
+                </table>
+            </div>
+            
+            <div class="shortcuts-section">
+                <h3>🖼️ Modal View (When viewing images)</h3>
+                <table class="shortcuts-table">
+                    <tr>
+                        <td>
+                            <div class="key-combo">
+                                <kbd>←</kbd> <kbd>→</kbd>
+                            </div>
+                        </td>
+                        <td>Navigate to previous/next image</td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <div class="key-combo">
+                                <kbd>Space</kbd>
+                            </div>
+                        </td>
+                        <td>Go to next image (or play/pause if video)</td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <div class="key-combo">
+                                <kbd>Esc</kbd>
+                            </div>
+                        </td>
+                        <td>Close modal</td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <div class="key-combo">
+                                <kbd>F</kbd>
+                            </div>
+                        </td>
+                        <td>Toggle favorite</td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <div class="key-combo">
+                                <kbd>D</kbd>
+                            </div>
+                        </td>
+                        <td>Download current image/video</td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <div class="key-combo">
+                                <kbd>F11</kbd>
+                            </div>
+                        </td>
+                        <td>Toggle fullscreen</td>
+                    </tr>
+                </table>
+            </div>
+            
+            <div class="shortcuts-section">
+                <h3>📋 Grid View</h3>
+                <table class="shortcuts-table">
+                    <tr>
+                        <td>
+                            <div class="key-combo">
+                                <kbd>?</kbd>
+                            </div>
+                        </td>
+                        <td>Show keyboard shortcuts help</td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+    </div>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

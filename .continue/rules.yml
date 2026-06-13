@@ -1,0 +1,14 @@
+# Continue.dev Rules Configuration
+# 
+# This project uses markdown rules files in the .continue/rules/ directory.
+# See the markdown files for detailed project documentation:
+#
+# - project-architecture.md - Project structure and architecture
+# - coding-standards.md - Python coding standards and conventions
+# - api-patterns.md - FastAPI route patterns and API design
+# - reddit-integration.md - Reddit API integration patterns
+# - media-handling.md - Media URL processing and display
+# - frontend-patterns.md - Frontend JavaScript and HTML patterns
+# - development-workflow.md - Development setup and workflow
+#
+# These rules help agent mode understand the codebase structure, patterns, and conventions.
