@@ -823,6 +823,7 @@
                 );
                 
                 if (isVideo && !isImage) {
+                    mediaContainer.classList.add('has-video');
                     const video = document.createElement('video');
                     video.controls = true;
                     video.muted = true;
@@ -908,24 +909,25 @@
                     mediaContainer.appendChild(img);
                 }
                 
-                const info = document.createElement('div');
-                info.className = 'media-info';
                 const permalink = item.permalink || `https://reddit.com/r/${item.subreddit}`;
                 const author = item.author || 'Unknown';
                 const userProfileUrl = `https://reddit.com/user/${author}`;
-                info.innerHTML = `
-                    <h3>${item.title}</h3>
-                    <div class="media-meta">
-                        <div class="media-meta-left">
-                            <span>r/${item.subreddit}</span>
-                            <span>•</span>
+
+                const scoreBadge = document.createElement('span');
+                scoreBadge.className = 'media-score-badge';
+                scoreBadge.textContent = item.score ?? 0;
+
+                const overlay = document.createElement('div');
+                overlay.className = 'media-overlay';
+                overlay.innerHTML = `
+                    <div class="media-overlay-title">${item.title}</div>
+                    <div class="media-overlay-meta">
+                        <div class="media-overlay-meta-left">
                             <a href="${userProfileUrl}" target="_blank" rel="noopener noreferrer" class="user-link" onclick="event.stopPropagation();">u/${author}</a>
-                            <span>•</span>
-                            <span>👍 ${item.score}</span>
+                            <span class="sep">•</span>
+                            <span>r/${item.subreddit}</span>
                         </div>
-                        <div class="media-meta-right">
-                            <a href="${permalink}" target="_blank" rel="noopener noreferrer" class="reddit-link" onclick="event.stopPropagation();">🔗</a>
-                        </div>
+                        <a href="${permalink}" target="_blank" rel="noopener noreferrer" class="reddit-link" onclick="event.stopPropagation();" title="Open on Reddit">↗</a>
                     </div>
                 `;
                 
@@ -952,9 +954,10 @@
                     favoriteCardBtn.classList.add('favorited');
                 }
                 mediaContainer.appendChild(favoriteCardBtn);
+                mediaContainer.appendChild(scoreBadge);
+                mediaContainer.appendChild(overlay);
                 
                 card.appendChild(mediaContainer);
-                card.appendChild(info);
                 
                 card.addEventListener('click', () => {
                     const index = allMediaItems.findIndex(i => i.url === item.url);
