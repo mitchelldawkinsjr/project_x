@@ -4,63 +4,37 @@ import time
 
 
 class CacheService:
-    """In-memory cache service with TTL support"""
-    
+    """In-memory cache with optional TTL."""
+
     def __init__(self):
-        self._cache: dict = {}
-        self._ttl: dict = {}
-    
+        self._store: dict[str, tuple[Any, Optional[float]]] = {}
+
     def set(self, key: str, value: Any, ttl_seconds: Optional[int] = None) -> None:
-        """Set a cache value with optional TTL"""
-        self._cache[key] = value
-        if ttl_seconds:
-            self._ttl[key] = time.time() + ttl_seconds
-        elif key in self._ttl:
-            del self._ttl[key]
-    
+        expiry = time.time() + ttl_seconds if ttl_seconds else None
+        self._store[key] = (value, expiry)
+
     def get(self, key: str) -> Optional[Any]:
-        """Get a cache value if it exists and hasn't expired"""
-        if key not in self._cache:
+        entry = self._store.get(key)
+        if entry is None:
             return None
-        
-        # Check TTL
-        if key in self._ttl:
-            if time.time() > self._ttl[key]:
-                # Expired
-                del self._cache[key]
-                del self._ttl[key]
-                return None
-        
-        return self._cache[key]
-    
-    def delete(self, key: str) -> None:
-        """Delete a cache entry"""
-        if key in self._cache:
-            del self._cache[key]
-        if key in self._ttl:
-            del self._ttl[key]
-    
-    def clear(self) -> None:
-        """Clear all cache"""
-        self._cache.clear()
-        self._ttl.clear()
-    
+        value, expiry = entry
+        if expiry is not None and time.time() > expiry:
+            del self._store[key]
+            return None
+        return value
+
     def get_stats(self) -> dict:
-        """Get cache statistics"""
         return {
-            "total_entries": len(self._cache),
-            "entries_with_ttl": len(self._ttl),
-            "cache_keys": list(self._cache.keys())
+            "total_entries": len(self._store),
+            "entries_with_ttl": sum(1 for _, expiry in self._store.values() if expiry is not None),
         }
 
 
-# Global cache instance
 cache = CacheService()
 
-# Cache TTL constants (in seconds)
-SUBREDDIT_SEARCH_TTL = 5 * 60  # 5 minutes
-MEDIA_RESPONSE_TTL = 10 * 60  # 10 minutes
-REDGIFS_URL_TTL = 60 * 60  # 1 hour
+SUBREDDIT_SEARCH_TTL = 5 * 60
+MEDIA_RESPONSE_TTL = 10 * 60
+REDGIFS_URL_TTL = 60 * 60
 
 
 def build_scrape_cache_key(
@@ -71,10 +45,8 @@ def build_scrape_cache_key(
     sort: str,
     time_filter: str,
 ) -> str:
-    """Build a deterministic cache key for scrape requests."""
     after_part = after or "start"
     return (
         f"scrape:{source_type}:{source.lower().strip()}:{limit}:"
         f"{after_part}:{sort}:{time_filter}"
     )
-

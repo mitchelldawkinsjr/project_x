@@ -1,16 +1,15 @@
 """Download endpoints"""
-from fastapi import APIRouter, Body, HTTPException
-from fastapi.responses import StreamingResponse
-from typing import List
-from urllib.parse import urlparse
-import zipfile
 import io
+import logging
+from urllib.parse import urlparse
+
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 
 from app.utils.http_client import get_http_session
-from app.utils.logger import get_logger
 
 router = APIRouter()
-logger = get_logger("download")
+logger = logging.getLogger(__name__)
 
 ALLOWED_DOWNLOAD_HOSTS = {
     "i.redd.it",
@@ -68,42 +67,6 @@ async def download_single(url: str):
             io.BytesIO(file_data),
             media_type="application/octet-stream",
             headers={"Content-Disposition": f"attachment; filename={filename}"},
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/api/download-batch")
-async def download_batch(urls: List[str] = Body(..., min_length=1, max_length=50)):
-    """Download multiple files as a ZIP."""
-    try:
-        zip_buffer = io.BytesIO()
-        downloaded = 0
-
-        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-            for i, url in enumerate(urls):
-                try:
-                    file_data = await download_file(url)
-                    filename = url.split("/")[-1].split("?")[0]
-                    if not filename or "." not in filename:
-                        filename = f"media_{i + 1}"
-                    zip_file.writestr(filename, file_data)
-                    downloaded += 1
-                except HTTPException as e:
-                    logger.warning("Skipping download for %s: %s", url, e.detail)
-                except Exception as e:
-                    logger.warning("Skipping download for %s: %s", url, e)
-
-        if downloaded == 0:
-            raise HTTPException(status_code=400, detail="No files could be downloaded")
-
-        zip_buffer.seek(0)
-        return StreamingResponse(
-            zip_buffer,
-            media_type="application/zip",
-            headers={"Content-Disposition": "attachment; filename=reddit_media.zip"},
         )
     except HTTPException:
         raise

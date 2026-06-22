@@ -55,24 +55,16 @@ def test_proxy_video_rejects_non_redgifs(client):
     assert "Only Redgifs URLs are allowed" in response.json()["error"]
 
 
+def test_resolve_redgifs_rejects_non_redgifs(client):
+    """Test resolve endpoint only allows Redgifs URLs"""
+    response = client.get("/api/resolve-redgifs?url=https://example.com/video.mp4")
+    assert response.status_code == 400
+    assert "Only Redgifs URLs are allowed" in response.json()["error"]
+
+
 def test_download_rejects_invalid_host(client):
     """Test download endpoint blocks SSRF-prone URLs"""
     response = client.get("/api/download?url=https://example.com/secret.txt")
-    assert response.status_code == 400
-
-
-def test_download_batch_rejects_empty_list(client):
-    """Test batch download requires at least one URL"""
-    response = client.post("/api/download-batch", json=[])
-    assert response.status_code == 422
-
-
-def test_download_batch_rejects_invalid_host(client):
-    """Test batch download validates each URL host"""
-    response = client.post(
-        "/api/download-batch",
-        json=["https://example.com/image.jpg"],
-    )
     assert response.status_code == 400
 
 

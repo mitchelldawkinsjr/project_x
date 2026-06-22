@@ -10,7 +10,6 @@ services:
       - REDDIT_CLIENT_ID=${REDDIT_CLIENT_ID:-}
       - REDDIT_CLIENT_SECRET=${REDDIT_CLIENT_SECRET:-}
     volumes:
-      # Mount .env file if it exists (optional)
       - ./.env:/app/.env:ro
     restart: unless-stopped
     healthcheck:
@@ -19,10 +18,3 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
-    networks:
-      - reddit-viewer-network
-
-networks:
-  reddit-viewer-network:
-    driver: bridge
-

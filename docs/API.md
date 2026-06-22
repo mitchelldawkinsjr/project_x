@@ -84,8 +84,7 @@ Scrape Reddit for media items.
     }
   ],
   "count": 25,
-  "total": 100,
-  "offset": 0,
+  "after": "t3_abc123",
   "has_more": true
 }
 ```
@@ -99,18 +98,6 @@ Download a single media file.
 - `url` (string, required): URL of the media file to download
 
 **Response**: Binary file download
-
----
-
-### POST `/api/download-batch`
-Download multiple files as a ZIP archive.
-
-**Request Body** (JSON):
-```json
-["https://url1.com/image.jpg", "https://url2.com/video.mp4"]
-```
-
-**Response**: ZIP file download (max 50 files)
 
 ---
 

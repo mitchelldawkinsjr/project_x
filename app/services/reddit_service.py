@@ -1,11 +1,12 @@
 """Reddit API service"""
+import logging
 import re
 import praw
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from app.utils.logger import get_logger
+from app.services.media_service import extract_media_from_post
 
-logger = get_logger("reddit_service")
+logger = logging.getLogger(__name__)
 
 
 def _parse_subreddit_names(source: str) -> List[str]:
@@ -31,34 +32,19 @@ def _parse_username(source: str) -> str:
     return name.strip()
 
 
-def _fetch_posts(subreddit, sort: str, time_filter: str, limit: int, after: Optional[str]):
-    """Return a listing of posts for the given sort mode."""
+def _fetch_sorted(listing, sort: str, time_filter: str, limit: int, after: Optional[str]):
+    """Return posts from a subreddit or user listing for the given sort mode."""
     params: Dict[str, Any] = {"limit": limit}
     if after:
         params["after"] = after
 
     if sort == "top":
-        return subreddit.top(time_filter=time_filter, **params)
+        return listing.top(time_filter=time_filter, **params)
     if sort == "new":
-        return subreddit.new(**params)
+        return listing.new(**params)
     if sort == "rising":
-        return subreddit.rising(**params)
-    return subreddit.hot(**params)
-
-
-def _fetch_user_posts(user, sort: str, time_filter: str, limit: int, after: Optional[str]):
-    """Return a listing of posts for a redditor's submissions."""
-    params: Dict[str, Any] = {"limit": limit}
-    if after:
-        params["after"] = after
-
-    if sort == "top":
-        return user.submissions.top(time_filter=time_filter, **params)
-    if sort == "new":
-        return user.submissions.new(**params)
-    if sort == "rising":
-        return user.submissions.rising(**params)
-    return user.submissions.hot(**params)
+        return listing.rising(**params)
+    return listing.hot(**params)
 
 
 def _append_subreddit(subreddits: List[Dict[str, Any]], seen_names: set, subreddit) -> None:
@@ -173,7 +159,6 @@ def scrape_media(
     after: Optional[str],
     sort: str,
     time_filter: str,
-    extract_post: Callable[[Any], Optional[Dict[str, Any]]],
 ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
     """Fetch Reddit posts and extract media items (blocking — run in a thread)."""
     media_items: List[Dict[str, Any]] = []
@@ -188,11 +173,11 @@ def scrape_media(
         combined_source = "+".join(subreddit_names)
         try:
             subreddit = reddit.subreddit(combined_source)
-            posts = _fetch_posts(subreddit, sort, time_filter, limit, after)
+            posts = _fetch_sorted(subreddit, sort, time_filter, limit, after)
             next_after = getattr(posts, "after", None)
 
             for post in posts:
-                item = extract_post(post)
+                item = extract_media_from_post(post)
                 if item:
                     media_items.append(item)
         except Exception as e:
@@ -205,10 +190,10 @@ def scrape_media(
                 for subreddit_name in subreddit_names:
                     try:
                         subreddit = reddit.subreddit(subreddit_name)
-                        posts = _fetch_posts(subreddit, sort, time_filter, per_sub_limit, after)
+                        posts = _fetch_sorted(subreddit, sort, time_filter, per_sub_limit, after)
                         next_after = getattr(posts, "after", None)
                         for post in posts:
-                            item = extract_post(post)
+                            item = extract_media_from_post(post)
                             if item:
                                 media_items.append(item)
                     except Exception as inner:
@@ -222,11 +207,11 @@ def scrape_media(
             return media_items, next_after
 
         user = reddit.redditor(username)
-        posts = _fetch_user_posts(user, sort, time_filter, limit, after)
+        posts = _fetch_sorted(user.submissions, sort, time_filter, limit, after)
         next_after = getattr(posts, "after", None)
 
         for post in posts:
-            item = extract_post(post)
+            item = extract_media_from_post(post)
             if item:
                 media_items.append(item)
 

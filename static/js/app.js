@@ -1,26 +1,3 @@
-        // Suppress errors from browser extensions
-        window.addEventListener('error', (e) => {
-            // Ignore errors from browser extensions (share-modal.js, etc.)
-            if (e.filename && (e.filename.includes('share-modal') || 
-                e.filename.includes('extension') || 
-                e.filename.includes('chrome-extension') ||
-                e.filename.includes('moz-extension'))) {
-                e.preventDefault();
-                return true;
-            }
-        }, true);
-        
-        // Suppress unhandled promise rejections from extensions
-        window.addEventListener('unhandledrejection', (e) => {
-            // Ignore extension-related promise rejections
-            if (e.reason && typeof e.reason === 'string' && 
-                (e.reason.includes('message channel') || 
-                 e.reason.includes('extension'))) {
-                e.preventDefault();
-                return true;
-            }
-        });
-        
         const form = document.getElementById('searchForm');
         const grid = document.getElementById('grid');
         const loading = document.getElementById('loading');
@@ -83,9 +60,6 @@
             });
         }
         const stats = document.getElementById('stats');
-        const progressBarContainer = document.getElementById('progressBarContainer');
-        const progressBar = document.getElementById('progressBar');
-        const progressText = document.getElementById('progressText');
         const modal = document.getElementById('modal');
         const modalContent = document.getElementById('modalContent');
         const modalMediaContainer = document.getElementById('modalMediaContainer');
@@ -95,30 +69,6 @@
         const prevClickArea = document.getElementById('prevClickArea');
         const nextClickArea = document.getElementById('nextClickArea');
         const galleryInfo = document.getElementById('galleryInfo');
-        
-        // Progress bar functions
-        function updateProgress(current, total) {
-            if (progressBarContainer && progressBar && progressText) {
-                if (total > 0) {
-                    const percentage = Math.round((current / total) * 100);
-                    progressBar.style.width = percentage + '%';
-                    progressText.textContent = `Loading ${current} of ${total} items...`;
-                    progressBarContainer.style.display = 'block';
-                } else {
-                    hideProgress();
-                }
-            }
-        }
-        
-        function hideProgress() {
-            if (progressBarContainer && progressText) {
-                progressBarContainer.style.display = 'none';
-                progressText.textContent = '';
-                if (progressBar) {
-                    progressBar.style.width = '0%';
-                }
-            }
-        }
         
         let allMediaItems = [];
         let currentIndex = 0;
@@ -167,60 +117,34 @@
         const sortSelect = document.getElementById('sort');
         const timeFilterGroup = document.getElementById('timeFilterGroup');
         
-        // localStorage utility functions with TTL support (must be defined before use)
         const CacheUtils = {
-            // Cache TTL: 5 minutes for subreddit search
-            SUBREDDIT_SEARCH_TTL: 5 * 60 * 1000, // 5 minutes in milliseconds
-            
             set(key, value, ttl = null) {
                 try {
-                    const item = {
-                        value: value,
+                    localStorage.setItem(key, JSON.stringify({
+                        value,
                         timestamp: Date.now(),
-                        ttl: ttl
-                    };
-                    localStorage.setItem(key, JSON.stringify(item));
+                        ttl,
+                    }));
                 } catch (e) {
                     console.warn('localStorage set failed:', e);
                 }
             },
-            
+
             get(key) {
                 try {
                     const itemStr = localStorage.getItem(key);
                     if (!itemStr) return null;
-                    
                     const item = JSON.parse(itemStr);
-                    const now = Date.now();
-                    
-                    // Check if expired
-                    if (item.ttl && (now - item.timestamp) > item.ttl) {
+                    if (item.ttl && (Date.now() - item.timestamp) > item.ttl) {
                         localStorage.removeItem(key);
                         return null;
                     }
-                    
                     return item.value;
                 } catch (e) {
                     console.warn('localStorage get failed:', e);
                     return null;
                 }
             },
-            
-            remove(key) {
-                try {
-                    localStorage.removeItem(key);
-                } catch (e) {
-                    console.warn('localStorage remove failed:', e);
-                }
-            },
-            
-            clear() {
-                try {
-                    localStorage.clear();
-                } catch (e) {
-                    console.warn('localStorage clear failed:', e);
-                }
-            }
         };
         
         // Show/hide time filter based on sort selection
@@ -267,6 +191,48 @@
                 }
             }
             return name.trim();
+        }
+        
+        function normalizeSubreddit(value) {
+            let name = (value || '').trim();
+            const prefixes = ['/r/', 'r/'];
+            for (const prefix of prefixes) {
+                if (name.toLowerCase().startsWith(prefix)) {
+                    name = name.slice(prefix.length);
+                    break;
+                }
+            }
+            return name.trim();
+        }
+        
+        function searchSourceInApp(type, name) {
+            if (!form || !sourceType) return;
+            
+            const normalized = type === 'user'
+                ? normalizeUsername(name)
+                : normalizeSubreddit(name);
+            if (!normalized || normalized.toLowerCase() === 'unknown') return;
+            
+            sourceType.value = type;
+            syncSourceTypeUI();
+            
+            if (type === 'user') {
+                sourceInput.value = normalized;
+            } else {
+                selectedSubreddits = [];
+                addSubreddit(normalized);
+            }
+            
+            if (modal) {
+                modal.style.display = 'none';
+            }
+            error.classList.remove('show');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+            if (typeof form.requestSubmit === 'function') {
+                form.requestSubmit();
+            } else {
+                form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+            }
         }
         
         function syncSourceTypeUI() {
@@ -382,94 +348,44 @@
             autocompleteDropdown.classList.add('show');
         }
         
+        async function fetchSubredditSuggestions(query) {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+            try {
+                const response = await fetch(
+                    `/api/search-subreddits?q=${encodeURIComponent(query)}`,
+                    { signal: controller.signal },
+                );
+                if (!response.ok) return;
+                const result = await response.json();
+                if (result.success && result.results) {
+                    showAutocomplete(result.results);
+                }
+            } catch (err) {
+                if (err.name !== 'AbortError') {
+                    console.error('Error fetching subreddits:', err);
+                }
+            } finally {
+                clearTimeout(timeoutId);
+            }
+        }
+
         if (autocompleteInput) {
             autocompleteInput.addEventListener('input', (e) => {
             const query = e.target.value.trim();
-            
             clearTimeout(autocompleteTimeout);
-            
-            // More aggressive: trigger on single character
             if (query.length < 1) {
                 autocompleteDropdown.classList.remove('show');
                 return;
             }
-            
-            // Check cache first
-            const cacheKey = `subreddit_search_${query.toLowerCase()}`;
-            const cachedResults = CacheUtils.get(cacheKey);
-            if (cachedResults && cachedResults.length > 0) {
-                showAutocomplete(cachedResults);
-                return;
-            }
-            
-            // Debounce increased to 150ms for better balance
-            autocompleteTimeout = setTimeout(async () => {
-                try {
-                    // Use AbortController for request cancellation
-                    const controller = new AbortController();
-                    const timeoutId = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
-                    
-                    const response = await fetch(`/api/search-subreddits?q=${encodeURIComponent(query)}`, {
-                        signal: controller.signal
-                    });
-                    clearTimeout(timeoutId);
-                    
-                    if (!response.ok) {
-                        console.error('API response not OK:', response.status, response.statusText);
-                        return;
-                    }
-                    
-                    const result = await response.json();
-                    
-                    if (result.success && result.results) {
-                        // Cache the results
-                        CacheUtils.set(cacheKey, result.results, CacheUtils.SUBREDDIT_SEARCH_TTL);
-                        showAutocomplete(result.results);
-                    } else {
-                        console.error('API returned unsuccessful result:', result);
-                    }
-                } catch (err) {
-                    if (err.name === 'AbortError') {
-                        console.log('Request aborted');
-                    } else {
-                        console.error('Error fetching subreddits:', err);
-                    }
-                }
-            }, 150);
+            autocompleteTimeout = setTimeout(() => fetchSubredditSuggestions(query), 150);
         });
-        
-        // Also trigger on focus if there's any text
+
         autocompleteInput.addEventListener('focus', () => {
             const query = autocompleteInput.value.trim();
             if (query.length >= 1) {
                 clearTimeout(autocompleteTimeout);
-                autocompleteTimeout = setTimeout(async () => {
-                    try {
-                        // Check cache first
-                        const cacheKey = `subreddit_search_${query.toLowerCase()}`;
-                        const cachedResults = CacheUtils.get(cacheKey);
-                        if (cachedResults && cachedResults.length > 0) {
-                            showAutocomplete(cachedResults);
-                            return;
-                        }
-                        
-                        const response = await fetch(`/api/search-subreddits?q=${encodeURIComponent(query)}`);
-                        if (!response.ok) {
-                            console.error('API response not OK:', response.status, response.statusText);
-                            return;
-                        }
-                        
-                        const result = await response.json();
-                        
-                        if (result.success && result.results && result.results.length > 0) {
-                            // Cache the results
-                            CacheUtils.set(cacheKey, result.results, CacheUtils.SUBREDDIT_SEARCH_TTL);
-                            showAutocomplete(result.results);
-                        }
-                    } catch (err) {
-                        console.error('Error fetching subreddits:', err);
-                    }
-                }, 50);
+                autocompleteTimeout = setTimeout(() => fetchSubredditSuggestions(query), 50);
             }
             });
             
@@ -551,7 +467,6 @@
             loadingMore.classList.remove('show');
             loadingMore.style.display = 'none';
             stats.textContent = '';
-            hideProgress();
             
             try {
                 // Add timeout to fetch request
@@ -572,7 +487,6 @@
                 const result = await parseScrapeResponse(response);
                 loading.style.display = 'none';
                 loading.classList.remove('show');
-                hideProgress();
                 
                 if (result.success) {
                     allMediaItems = result.items;
@@ -753,30 +667,113 @@
             });
         }
         
-        /** Strip DASH manifest selector from Reddit packaged CDN (HTML5 video needs progressive MP4, not MPD). */
-        function normalizePackagedRedditMediaUrl(u) {
-            if (!u || u.toLowerCase().indexOf('packaged-media.redd.it') === -1) return u;
-            try {
-                const url = new URL(u);
-                const m = url.searchParams.get('m');
-                if (m && (m.toLowerCase().includes('dashplaylist') || m.toLowerCase().endsWith('.mpd'))) {
-                    url.searchParams.delete('m');
-                }
-                return url.toString();
-            } catch (e) {
-                return u;
-            }
+        function isPlayableVideo(item) {
+            const urlLower = item.url.toLowerCase();
+            const isRedditPreviewVideo =
+                urlLower.includes('preview.redd.it') && /\bformat=(mp4|webm)(\b|[&])/i.test(urlLower);
+            const isVideo = item.is_video ||
+                urlLower.includes('.mp4') ||
+                urlLower.includes('.webm') ||
+                urlLower.includes('v.redd.it') ||
+                urlLower.includes('packaged-media.redd.it') ||
+                urlLower.includes('media.redgifs.com') ||
+                isRedditPreviewVideo ||
+                (urlLower.includes('redgifs.com') && (
+                    urlLower.includes('/watch/') || urlLower.includes('.mp4') || urlLower.includes('.webm')
+                ));
+            const isImage = !isRedditPreviewVideo && (
+                urlLower.includes('.jpg') ||
+                urlLower.includes('.jpeg') ||
+                urlLower.includes('.png') ||
+                urlLower.includes('.webp') ||
+                (urlLower.includes('.gif') && !urlLower.includes('redgifs.com') &&
+                    !urlLower.includes('.mp4') && !/\bformat=(mp4|webm)(\b|[&])/i.test(urlLower))
+            );
+            return isVideo && !isImage;
         }
-        
-        /** Redgifs: only ever use media.redgifs.com/{id}.mp4 (+ proxy) — never the full watch site. */
-        function canonicalRedgifsMp4Url(u) {
-            if (!u || u.toLowerCase().indexOf('redgifs.com') === -1) return u;
-            const s = u.trim();
-            let m = s.match(/^https?:\/\/media\.redgifs\.com\/([^/?#]+)\.(mp4|webm)/i);
-            if (m) return `https://media.redgifs.com/${m[1]}.mp4`;
-            m = s.match(/(?:www\.)?redgifs\.com\/watch\/([^/?#]+)/i);
-            if (m) return `https://media.redgifs.com/${m[1]}.mp4`;
-            return u;
+
+        function isRedgifsUrl(url) {
+            return url.toLowerCase().includes('redgifs.com');
+        }
+
+        function extractRedgifsId(u) {
+            if (!u) return null;
+            let m = u.match(/(?:www\.)?redgifs\.com\/watch\/([^/?#]+)/i);
+            if (m) return m[1];
+            m = u.match(/media\.redgifs\.com\/([^/?#]+)\.(?:mp4|webm)/i);
+            if (m) {
+                let id = m[1];
+                if (id.endsWith('-silent')) id = id.slice(0, -7);
+                return id;
+            }
+            return null;
+        }
+
+        function redgifsProxySrc(mp4Url) {
+            return `/api/proxy-video?url=${encodeURIComponent(mp4Url)}`;
+        }
+
+        function redgifsEmbedUrl(u) {
+            const id = extractRedgifsId(u);
+            return id ? `https://www.redgifs.com/ifr/${id.toLowerCase()}` : null;
+        }
+
+        function mountRedgifsIframe(container, displayUrl, options = {}) {
+            const embedUrl = redgifsEmbedUrl(displayUrl);
+            if (!embedUrl) return false;
+            container.innerHTML = '';
+            container.classList.add('has-redgifs-embed');
+            const iframe = document.createElement('iframe');
+            iframe.src = embedUrl;
+            iframe.title = 'Redgifs video';
+            iframe.loading = 'lazy';
+            iframe.allow = 'autoplay; fullscreen';
+            iframe.setAttribute('allowfullscreen', '');
+            iframe.referrerPolicy = 'no-referrer-when-downgrade';
+            if (options.pointerEventsNone) {
+                iframe.style.pointerEvents = 'none';
+            }
+            container.appendChild(iframe);
+            return true;
+        }
+
+        async function resolveRedgifsMp4Url(displayUrl) {
+            const response = await fetch(`/api/resolve-redgifs?url=${encodeURIComponent(displayUrl)}`);
+            if (!response.ok) return null;
+            const data = await response.json();
+            return data.url || null;
+        }
+
+        function wireRedgifsVideoPlayback(video, container, displayUrl, options = {}) {
+            const logPrefix = options.logPrefix || 'Redgifs';
+            let resolveAttempted = false;
+            let iframeFallbackUsed = false;
+
+            const tryIframeFallback = () => {
+                if (iframeFallbackUsed) return;
+                iframeFallbackUsed = true;
+                console.warn(`${logPrefix}: falling back to Redgifs embed`);
+                mountRedgifsIframe(container, displayUrl, options);
+            };
+
+            video.addEventListener('error', async () => {
+                console.error(`${logPrefix} video load error:`, displayUrl, video.error);
+
+                if (!resolveAttempted) {
+                    resolveAttempted = true;
+                    try {
+                        const resolved = await resolveRedgifsMp4Url(displayUrl);
+                        if (resolved && resolved !== displayUrl) {
+                            video.src = redgifsProxySrc(resolved);
+                            return;
+                        }
+                    } catch (err) {
+                        console.warn(`${logPrefix} resolve failed:`, err);
+                    }
+                }
+
+                tryIframeFallback();
+            });
         }
         
         function displayMedia(items, clearGrid = true) {
@@ -794,50 +791,28 @@
                 const mediaContainer = document.createElement('div');
                 mediaContainer.className = 'media-container';
                 
-                // Determine if this is actually a video based on URL and is_video flag
-                const displayUrl = normalizePackagedRedditMediaUrl(canonicalRedgifsMp4Url(item.url));
+                const displayUrl = item.url;
                 const urlLower = displayUrl.toLowerCase();
-                const url = displayUrl;
                 
-                // Check for Reddit preview URLs with format=mp4 (these are videos, not GIFs)
-                const isRedditPreviewVideo =
-                    urlLower.includes('preview.redd.it') && /\bformat=(mp4|webm)(\b|[&])/i.test(url);
-                
-                const isVideo = item.is_video || 
-                    urlLower.includes('.mp4') || 
-                    urlLower.includes('.webm') || 
-                    urlLower.includes('v.redd.it') ||
-                    urlLower.includes('packaged-media.redd.it') ||
-                    urlLower.includes('media.redgifs.com') || // Direct Redgifs media URLs
-                    isRedditPreviewVideo || // Reddit preview URLs with format=mp4
-                    (urlLower.includes('redgifs.com') && (urlLower.includes('/watch/') || urlLower.includes('.mp4') || urlLower.includes('.webm')));
-                
-                // Don't treat as video if it's clearly an image
-                // But exclude Reddit preview URLs with format=mp4 from being treated as images
-                const isImage = !isRedditPreviewVideo && (
-                    urlLower.includes('.jpg') || 
-                    urlLower.includes('.jpeg') || 
-                    urlLower.includes('.png') || 
-                    urlLower.includes('.webp') ||
-                    (urlLower.includes('.gif') && !urlLower.includes('redgifs.com') && !urlLower.includes('.mp4') && !/\bformat=(mp4|webm)(\b|[&])/i.test(url))
-                );
-                
-                if (isVideo && !isImage) {
+                if (isPlayableVideo(item)) {
                     mediaContainer.classList.add('has-video');
+                    card.classList.add('has-video');
                     const video = document.createElement('video');
-                    video.controls = true;
                     video.muted = true;
-                    video.preload = 'metadata'; // Changed to 'metadata' for better performance
-                    video.playsInline = true; // For mobile compatibility
+                    video.loop = true;
+                    video.playsInline = true;
+                    video.preload = 'metadata';
+                    video.setAttribute('playsinline', '');
                     
-                    // For Redgifs direct MP4 URLs, use our proxy endpoint to bypass 403 errors
-                    const isRedgifsDirect = urlLower.includes('media.redgifs.com') || urlLower.includes('redgifs.com');
+                    const isRedgifsDirect = isRedgifsUrl(displayUrl);
                     
                     if (isRedgifsDirect) {
-                        // Use proxy endpoint to fetch video with proper headers
-                        const proxyUrl = `/api/proxy-video?url=${encodeURIComponent(displayUrl)}`;
-                        video.src = proxyUrl;
-                        video.crossOrigin = null; // No CORS needed when proxied through our server
+                        video.src = redgifsProxySrc(displayUrl);
+                        video.crossOrigin = null;
+                        wireRedgifsVideoPlayback(video, mediaContainer, displayUrl, {
+                            logPrefix: 'Grid',
+                            pointerEventsNone: true,
+                        });
                     } else {
                         // For other external domains, try with CORS
                         video.src = displayUrl;
@@ -911,7 +886,6 @@
                 
                 const permalink = item.permalink || `https://reddit.com/r/${item.subreddit}`;
                 const author = item.author || 'Unknown';
-                const userProfileUrl = `https://reddit.com/user/${author}`;
 
                 const scoreBadge = document.createElement('span');
                 scoreBadge.className = 'media-score-badge';
@@ -919,17 +893,57 @@
 
                 const overlay = document.createElement('div');
                 overlay.className = 'media-overlay';
-                overlay.innerHTML = `
-                    <div class="media-overlay-title">${item.title}</div>
-                    <div class="media-overlay-meta">
-                        <div class="media-overlay-meta-left">
-                            <a href="${userProfileUrl}" target="_blank" rel="noopener noreferrer" class="user-link" onclick="event.stopPropagation();">u/${author}</a>
-                            <span class="sep">•</span>
-                            <span>r/${item.subreddit}</span>
-                        </div>
-                        <a href="${permalink}" target="_blank" rel="noopener noreferrer" class="reddit-link" onclick="event.stopPropagation();" title="Open on Reddit">↗</a>
-                    </div>
-                `;
+
+                const titleEl = document.createElement('div');
+                titleEl.className = 'media-overlay-title';
+                titleEl.textContent = item.title;
+
+                const meta = document.createElement('div');
+                meta.className = 'media-overlay-meta';
+
+                const metaLeft = document.createElement('div');
+                metaLeft.className = 'media-overlay-meta-left';
+
+                const userLink = document.createElement('a');
+                userLink.href = '#';
+                userLink.className = 'user-link';
+                userLink.textContent = `u/${author}`;
+                userLink.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    searchSourceInApp('user', author);
+                });
+
+                const sep = document.createElement('span');
+                sep.className = 'sep';
+                sep.textContent = '•';
+
+                const subLink = document.createElement('a');
+                subLink.href = '#';
+                subLink.className = 'user-link';
+                subLink.textContent = `r/${item.subreddit}`;
+                subLink.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    searchSourceInApp('subreddit', item.subreddit);
+                });
+
+                const redditLink = document.createElement('a');
+                redditLink.href = permalink;
+                redditLink.target = '_blank';
+                redditLink.rel = 'noopener noreferrer';
+                redditLink.className = 'reddit-link';
+                redditLink.title = 'Open on Reddit';
+                redditLink.textContent = '↗';
+                redditLink.addEventListener('click', (e) => e.stopPropagation());
+
+                metaLeft.appendChild(userLink);
+                metaLeft.appendChild(sep);
+                metaLeft.appendChild(subLink);
+                meta.appendChild(metaLeft);
+                meta.appendChild(redditLink);
+                overlay.appendChild(titleEl);
+                overlay.appendChild(meta);
                 
                 // Add favorite button to card
                 const favoriteCardBtn = document.createElement('button');
@@ -959,6 +973,23 @@
                 
                 card.appendChild(mediaContainer);
                 
+                const gridVideo = mediaContainer.querySelector('video');
+                if (gridVideo) {
+                    card.addEventListener('mouseenter', () => {
+                        grid.querySelectorAll('.media-container video').forEach(v => {
+                            if (v !== gridVideo) {
+                                v.pause();
+                                v.currentTime = 0;
+                            }
+                        });
+                        gridVideo.play().catch(() => {});
+                    });
+                    card.addEventListener('mouseleave', () => {
+                        gridVideo.pause();
+                        gridVideo.currentTime = 0;
+                    });
+                }
+                
                 card.addEventListener('click', () => {
                     const index = allMediaItems.findIndex(i => i.url === item.url);
                     openModal(index);
@@ -982,169 +1013,68 @@
             const item = allMediaItems[currentIndex];
             modalMediaContainer.innerHTML = '';
             
-            const displayUrl = normalizePackagedRedditMediaUrl(canonicalRedgifsMp4Url(item.url));
+            const displayUrl = item.url;
             const urlLower = displayUrl.toLowerCase();
-            const url = displayUrl;
             
-            // Check for Reddit preview URLs with format=mp4 (these are videos, not GIFs)
-            const isRedditPreviewVideo =
-                urlLower.includes('preview.redd.it') && /\bformat=(mp4|webm)(\b|[&])/i.test(url);
-            
-            const isVideo = item.is_video || 
-                urlLower.includes('.mp4') || 
-                urlLower.includes('.webm') || 
-                urlLower.includes('v.redd.it') ||
-                urlLower.includes('packaged-media.redd.it') ||
-                urlLower.includes('media.redgifs.com') || // Direct Redgifs media URLs
-                isRedditPreviewVideo || // Reddit preview URLs with format=mp4
-                (urlLower.includes('redgifs.com') && (urlLower.includes('/watch/') || urlLower.includes('.mp4') || urlLower.includes('.webm')));
-            
-            // Don't treat as video if it's clearly an image
-            // But exclude Reddit preview URLs with format=mp4 from being treated as images
-            const isImage = !isRedditPreviewVideo && (
-                urlLower.includes('.jpg') || 
-                urlLower.includes('.jpeg') || 
-                urlLower.includes('.png') || 
-                urlLower.includes('.webp') ||
-                (urlLower.includes('.gif') && !urlLower.includes('redgifs.com') && !urlLower.includes('.mp4') && !/\bformat=(mp4|webm)(\b|[&])/i.test(url))
-            );
-            
-            if (isVideo && !isImage) {
-                // Show video controls
+            if (isPlayableVideo(item)) {
                 videoControls.style.display = 'flex';
                 
                 const video = document.createElement('video');
                 video.controls = true;
-                // Start muted for autoplay to work, then unmute once playing
                 video.muted = true;
-                video.volume = 1.0; // Set volume to max
+                video.volume = 1.0;
                 video.autoplay = true;
                 video.loop = true;
-                video.playsInline = true; // For mobile compatibility
+                video.playsInline = true;
                 video.playbackRate = parseFloat(playbackSpeed.value);
                 
-                // For Redgifs direct MP4 URLs, use our proxy endpoint to bypass 403 errors
-                // Redgifs blocks direct access but allows requests with proper headers
-                const isRedgifsDirect = urlLower.includes('media.redgifs.com') || urlLower.includes('redgifs.com');
+                const isRedgifsDirect = isRedgifsUrl(displayUrl);
                 
                 if (isRedgifsDirect) {
-                    // Use proxy endpoint to fetch video with proper headers
-                    const proxyUrl = `/api/proxy-video?url=${encodeURIComponent(displayUrl)}`;
-                    video.src = proxyUrl;
-                    video.crossOrigin = null; // No CORS needed when proxied through our server
+                    video.src = redgifsProxySrc(displayUrl);
+                    video.crossOrigin = null;
+                    wireRedgifsVideoPlayback(video, modalMediaContainer, displayUrl, {
+                        logPrefix: 'Modal',
+                    });
                 } else {
-                    // For other external domains, try with CORS
                     video.src = displayUrl;
-                    if (!urlLower.includes('i.redd.it') && !urlLower.includes('v.redd.it') && !urlLower.includes('preview.redd.it') && !urlLower.includes('packaged-media.redd.it')) {
+                    if (!urlLower.includes('i.redd.it') && !urlLower.includes('v.redd.it') &&
+                        !urlLower.includes('preview.redd.it') && !urlLower.includes('packaged-media.redd.it')) {
                         video.crossOrigin = 'anonymous';
                     }
                 }
                 
-                // Add comprehensive error handling
                 let errorShown = false;
-                video.addEventListener('error', (e) => {
-                    if (errorShown) return; // Prevent multiple error messages
+                if (!isRedgifsDirect) video.addEventListener('error', () => {
+                    if (errorShown) return;
                     errorShown = true;
-                    
-                    console.error('Video load error in modal:', e, displayUrl);
-                    if (video.error) {
-                        console.error('Video error code:', video.error.code, 'Message:', video.error.message);
-                    }
-                    
-                    // Show error message with retry option
                     const errorDiv = document.createElement('div');
                     errorDiv.style.cssText = 'color: white; background: rgba(0,0,0,0.7); padding: 20px; border-radius: 5px; text-align: center; cursor: pointer;';
                     errorDiv.innerHTML = 'Video failed to load.<br><small>Click to retry</small>';
                     errorDiv.onclick = () => {
                         errorDiv.remove();
                         errorShown = false;
-                        video.load(); // Retry loading
+                        video.load();
                         video.play().catch(err => console.error('Play failed:', err));
                     };
                     modalMediaContainer.appendChild(errorDiv);
                 });
                 
-                // Explicitly play video after it's loaded and added to DOM
                 video.addEventListener('loadeddata', () => {
-                    console.log('Video loaded successfully in modal:', displayUrl);
-                    errorShown = false; // Reset error flag on successful load
+                    errorShown = false;
                     if (modalInfoDimensions) {
                         modalInfoDimensions.textContent = `${video.videoWidth} × ${video.videoHeight}px`;
                     }
-                    // Unmute before trying to play
                     video.muted = false;
-                    // Explicitly call play() to ensure video starts
-                    video.play().then(() => {
-                        // Ensure unmuted after play starts
-                        video.muted = false;
-                    }).catch(err => {
-                        console.warn('Autoplay prevented, user interaction required:', err);
-                        // Video will still be playable via controls
-                    });
+                    video.play().catch(() => {});
                 });
                 
-                // Also try to play when video can start playing
-                video.addEventListener('canplay', () => {
-                    // Unmute before trying to play
-                    video.muted = false;
-                    video.play().then(() => {
-                        // Ensure unmuted after play starts
-                        video.muted = false;
-                    }).catch(err => {
-                        // Ignore autoplay errors - user can click play button
-                        if (err.name !== 'NotAllowedError') {
-                            console.warn('Video play error:', err);
-                        }
-                    });
-                });
-                
-                // Unmute when video actually starts playing - this is the most reliable way
                 video.addEventListener('playing', () => {
-                    console.log('Video started playing, unmuting for sound');
-                    video.muted = false;
-                    video.volume = 1.0; // Ensure volume is max
-                }, { once: true }); // Only need to do this once
-                
-                // Unmute on user interaction (click, touch, etc.) - ensures sound works even if autoplay is blocked
-                const unmuteOnInteraction = () => {
-                    if (video.muted) {
-                        video.muted = false;
-                    }
-                };
-                video.addEventListener('click', unmuteOnInteraction);
-                video.addEventListener('touchstart', unmuteOnInteraction);
-                // Also unmute when user clicks play button on controls
-                video.addEventListener('play', unmuteOnInteraction);
-                
-                // Handle stalled/aborted events
-                video.addEventListener('stalled', () => {
-                    console.warn('Video stalled, attempting to reload...');
-                    video.load();
-                });
-                
-                modalMediaContainer.appendChild(video);
-                
-                // Try to unmute immediately after adding to DOM - modal opening is user interaction
-                // Use requestAnimationFrame to ensure it happens in the next frame
-                requestAnimationFrame(() => {
                     video.muted = false;
                     video.volume = 1.0;
-                });
+                }, { once: true });
                 
-                // Try to play immediately after adding to DOM (for browsers that allow it)
-                setTimeout(() => {
-                    // Ensure unmuted before playing
-                    video.muted = false;
-                    video.play().then(() => {
-                        // Ensure still unmuted after play starts
-                        video.muted = false;
-                    }).catch(err => {
-                        // Autoplay blocked - this is normal, user can use controls
-                        if (err.name !== 'NotAllowedError') {
-                            console.warn('Video play error:', err);
-                        }
-                    });
-                }, 100);
+                modalMediaContainer.appendChild(video);
             } else {
                 // Hide video controls for images
                 videoControls.style.display = 'none';
@@ -1289,53 +1219,11 @@
             setDarkMode(!isDarkMode());
         });
         
-        // Download functionality
         function downloadMedia(url, filename) {
-            // Use the new download API endpoint
             const downloadUrl = `/api/download?url=${encodeURIComponent(url)}`;
             const link = document.createElement('a');
             link.href = downloadUrl;
             link.download = filename || 'media';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-        }
-        
-        function downloadBatch(urls) {
-            // Download multiple files as ZIP
-            fetch('/api/download-batch', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(urls)
-            })
-            .then(response => {
-                if (!response.ok) throw new Error('Download failed');
-                return response.blob();
-            })
-            .then(blob => {
-                const url = window.URL.createObjectURL(blob);
-                const link = document.createElement('a');
-                link.href = url;
-                link.download = 'reddit_media.zip';
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-                window.URL.revokeObjectURL(url);
-            })
-            .catch(err => {
-                console.error('Batch download error:', err);
-                showError('network', 'Download Failed', 'Failed to download files. Please try again.');
-            });
-        }
-        
-        // Original downloadMedia function (kept for backward compatibility)
-        function downloadMediaOld(url, filename) {
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = filename || url.split('/').pop().split('?')[0];
-            link.target = '_blank';
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
@@ -1358,7 +1246,7 @@
         downloadBtn.addEventListener('click', () => {
             if (currentIndex >= 0 && currentIndex < allMediaItems.length) {
                 const item = allMediaItems[currentIndex];
-                const streamUrl = normalizePackagedRedditMediaUrl(canonicalRedgifsMp4Url(item.url));
+                const streamUrl = item.url;
                 const filename = `${item.subreddit}_${item.title.substring(0, 50).replace(/[^a-z0-9]/gi, '_')}.${streamUrl.split('.').pop().split('?')[0]}`;
                 downloadMedia(streamUrl, filename);
             }
@@ -1393,7 +1281,7 @@
             copyUrlBtn.addEventListener('click', () => {
                 if (currentIndex >= 0 && currentIndex < allMediaItems.length) {
                     const item = allMediaItems[currentIndex];
-                    copyToClipboard(normalizePackagedRedditMediaUrl(canonicalRedgifsMp4Url(item.url)));
+                    copyToClipboard(item.url);
                 }
             });
         }
@@ -1402,7 +1290,7 @@
             modalInfoCopyUrl.addEventListener('click', () => {
                 if (currentIndex >= 0 && currentIndex < allMediaItems.length) {
                     const item = allMediaItems[currentIndex];
-                    copyToClipboard(normalizePackagedRedditMediaUrl(canonicalRedgifsMp4Url(item.url)));
+                    copyToClipboard(item.url);
                 }
             });
         }
@@ -1484,20 +1372,9 @@
             }
         });
         
-        // Enhanced keyboard shortcuts
-        const keyboardHint = document.getElementById('keyboardHint');
         const shortcutsLegend = document.getElementById('shortcutsLegend');
         const helpBtn = document.getElementById('helpBtn');
         const shortcutsLegendClose = document.getElementById('shortcutsLegendClose');
-        let hintTimeout = null;
-        
-        function showKeyboardHint() {
-            keyboardHint.classList.add('show');
-            clearTimeout(hintTimeout);
-            hintTimeout = setTimeout(() => {
-                keyboardHint.classList.remove('show');
-            }, 3000);
-        }
         
         function toggleShortcutsLegend() {
             shortcutsLegend.classList.toggle('show');

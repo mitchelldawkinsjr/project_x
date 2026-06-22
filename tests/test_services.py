@@ -2,12 +2,13 @@
 import pytest
 from pydantic import ValidationError
 from app.models.schemas import ScrapeRequest
-from app.services.cache_service import CacheService, cache
+from app.services.cache_service import CacheService
 from app.services.reddit_service import _parse_subreddit_names, _parse_username
 from app.services.media_service import (
     is_media_url,
     get_media_url,
     canonical_redgifs_mp4_url,
+    extract_redgifs_id,
     normalize_packaged_reddit_media_url,
     resolve_redgifs_mp4_url,
 )
@@ -60,6 +61,13 @@ def test_canonical_redgifs_mp4_url():
     assert canonical_redgifs_mp4_url("https://i.redd.it/x.jpg") == "https://i.redd.it/x.jpg"
 
 
+def test_extract_redgifs_id():
+    assert extract_redgifs_id("https://www.redgifs.com/watch/foo-bar") == "foo-bar"
+    assert extract_redgifs_id("https://media.redgifs.com/FooBar.mp4") == "FooBar"
+    assert extract_redgifs_id("https://media.redgifs.com/FooBar-silent.mp4") == "FooBar"
+    assert extract_redgifs_id("https://i.redd.it/x.jpg") is None
+
+
 def test_resolve_redgifs_mp4_url_uses_poster_casing():
     class FakePost:
         url = "https://www.redgifs.com/watch/joyfulimmensepug"
@@ -80,22 +88,13 @@ def test_resolve_redgifs_mp4_url_uses_poster_casing():
 def test_cache_service():
     """Test cache service"""
     test_cache = CacheService()
-    
-    # Test set and get
+
     test_cache.set("test_key", "test_value")
     assert test_cache.get("test_key") == "test_value"
-    
-    # Test TTL expiration
+
     test_cache.set("ttl_key", "ttl_value", ttl_seconds=1)
     assert test_cache.get("ttl_key") == "ttl_value"
-    
-    # Test delete
-    test_cache.delete("test_key")
-    assert test_cache.get("test_key") is None
-    
-    # Test clear
-    test_cache.clear()
-    assert test_cache.get("ttl_key") is None
+    assert test_cache.get("missing_key") is None
 
 
 def test_normalize_packaged_reddit_media_url():

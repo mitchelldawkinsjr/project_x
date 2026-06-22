@@ -1,8 +1,7 @@
 """Media URL processing service"""
 import re
 import aiohttp
-import asyncio
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 # Supported image/GIF extensions
 MEDIA_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.gifv', '.webp', '.mp4', '.webm'}
@@ -65,14 +64,28 @@ def resolve_redgifs_mp4_url(post, url: str) -> str:
     return canonical_redgifs_mp4_url(url)
 
 
+def extract_redgifs_id(url: str) -> Optional[str]:
+    """Extract Redgifs clip id from watch or media URLs."""
+    if not url or "redgifs.com" not in url.lower():
+        return None
+    watch_match = re.search(r"(?:www\.)?redgifs\.com/watch/([^/?#]+)", url, re.I)
+    if watch_match:
+        return watch_match.group(1)
+    media_match = re.search(r"media\.redgifs\.com/([^/?#]+)\.(?:mp4|webm)", url, re.I)
+    if media_match:
+        clip_id = media_match.group(1)
+        if clip_id.endswith("-silent"):
+            clip_id = clip_id[: -len("-silent")]
+        return clip_id
+    return None
+
+
 async def fetch_redgifs_mp4_from_watch_page(
     url: str,
     http_session: aiohttp.ClientSession,
 ) -> Optional[str]:
     """Fetch the case-correct Redgifs MP4 URL from a watch page (fallback on 403)."""
-    watch_match = re.search(r"(?:www\.)?redgifs\.com/watch/([^/?#]+)", url, re.I)
-    media_match = re.search(r"media\.redgifs\.com/([^/?#]+)\.mp4", url, re.I)
-    watch_id = watch_match.group(1) if watch_match else (media_match.group(1) if media_match else None)
+    watch_id = extract_redgifs_id(url)
     if not watch_id:
         return None
 
@@ -160,88 +173,6 @@ def is_media_url(url: str) -> bool:
     if 'gfycat.com' in url_lower or 'redgifs.com' in url_lower:
         return True
     return False
-
-
-async def get_redgifs_url(url: str, http_session: aiohttp.ClientSession) -> str:
-    """Fetch direct video URL from Redgifs by scraping the page"""
-    try:
-        # Extract video ID from URL
-        match = re.search(r'redgifs\.com/watch/([^/?]+)', url)
-        if not match:
-            return url
-        
-        video_id = match.group(1)
-        
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        try:
-            async with http_session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                if response.status == 200:
-                    html = await response.text()
-                    
-                    # Method 1: Look for JSON-LD structured data
-                    json_ld_match = re.search(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', html, re.DOTALL)
-                    if json_ld_match:
-                        try:
-                            import json
-                            json_data = json.loads(json_ld_match.group(1))
-                            if isinstance(json_data, dict) and 'contentUrl' in json_data:
-                                return json_data['contentUrl']
-                        except:
-                            pass
-                    
-                    # Method 2: Look for video source in script tags
-                    video_match = re.search(r'"contentUrl"\s*:\s*"([^"]+)"', html)
-                    if video_match:
-                        video_url = video_match.group(1)
-                        if video_url.startswith('http'):
-                            return video_url
-                    
-                    # Method 3: Look for videoUrl
-                    video_match = re.search(r'"videoUrl"\s*:\s*"([^"]+)"', html)
-                    if video_match:
-                        video_url = video_match.group(1)
-                        if video_url.startswith('http'):
-                            return video_url
-                    
-                    # Method 4: Look for direct video URLs
-                    video_match = re.search(r'(https://[^"]*redgifs[^"]*\.(mp4|webm))', html, re.IGNORECASE)
-                    if video_match:
-                        video_url = video_match.group(1)
-                        if not video_url.endswith(('.jpg', '.jpeg', '.png', '.webp')):
-                            return video_url
-                    
-                    # Method 5: Look for thumbs2.redgifs.com pattern
-                    video_match = re.search(r'(https://thumbs2\.redgifs\.com/[^"]+\.(mp4|webm))', html, re.IGNORECASE)
-                    if video_match:
-                        video_url = video_match.group(1)
-                        if not video_url.endswith(('.jpg', '.jpeg', '.png', '.webp')):
-                            return video_url
-                    
-                    # Method 6: Look for video sources in script tags
-                    video_match = re.search(r'"url"\s*:\s*"(https://[^"]*redgifs[^"]*\.(mp4|webm))"', html, re.IGNORECASE)
-                    if video_match:
-                        video_url = video_match.group(1)
-                        if not video_url.endswith(('.jpg', '.jpeg', '.png', '.webp')):
-                            return video_url
-                    
-                    # Method 7: Look for media.redgifs.com direct URLs
-                    media_match = re.search(r'(https://media\.redgifs\.com/[^"]+\.(mp4|webm))', html, re.IGNORECASE)
-                    if media_match:
-                        video_url = media_match.group(1)
-                        if not video_url.endswith(('.jpg', '.jpeg', '.png', '.webp')):
-                            return video_url
-        except asyncio.TimeoutError:
-            return url
-        except aiohttp.ClientError:
-            return url
-        except Exception:
-            return url
-        
-        return url
-    except Exception:
-        return url
 
 
 def get_media_url(url: str) -> Optional[str]:
@@ -341,10 +272,7 @@ def _extract_media_url_from_post_data(post, url: str) -> tuple[Optional[str], bo
     return media_url, is_video
 
 
-def extract_media_from_post(
-    post,
-    normalize_redgifs: Callable[[str], str],
-) -> Optional[dict[str, Any]]:
+def extract_media_from_post(post) -> Optional[dict[str, Any]]:
     """Extract a media item dict from a Reddit post, or None if not media."""
     url = post.url
     try:
@@ -377,7 +305,7 @@ def extract_media_from_post(
     if "redgifs.com" in media_url.lower():
         media_url = resolve_redgifs_mp4_url(post, media_url)
     else:
-        media_url = normalize_redgifs(media_url)
+        media_url = canonical_redgifs_mp4_url(media_url)
     media_url = normalize_packaged_reddit_media_url(media_url)
 
     return {

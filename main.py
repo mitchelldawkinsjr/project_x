@@ -1,39 +1,32 @@
 from contextlib import asynccontextmanager
+import asyncio
+import logging
+import os
+import time
+from urllib.parse import urlparse
 
-from fastapi import FastAPI, Request, Form
+from dotenv import load_dotenv
+from fastapi import FastAPI, Form, Request
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import ValidationError
-import os
-import asyncio
-import time
-from dotenv import load_dotenv
 
-from app.services.reddit_service import initialize_reddit_client, search_subreddits, scrape_media
-from app.services.media_service import (
-    canonical_redgifs_mp4_url,
-    extract_media_from_post,
-    fetch_redgifs_mp4_from_watch_page,
-)
+from app.api.download import router as download_router
 from app.services.cache_service import (
-    cache,
-    SUBREDDIT_SEARCH_TTL,
     MEDIA_RESPONSE_TTL,
     REDGIFS_URL_TTL,
+    SUBREDDIT_SEARCH_TTL,
     build_scrape_cache_key,
+    cache,
 )
+from app.services.media_service import extract_redgifs_id, fetch_redgifs_mp4_from_watch_page
+from app.services.reddit_service import initialize_reddit_client, scrape_media, search_subreddits
 from app.utils.helpers import format_error_message
 from app.utils.http_client import close_http_session, get_http_session
-from app.utils.logger import get_logger
 
-try:
-    from app.api.download import router as download_router
-except ImportError:
-    download_router = None
-
-logger = get_logger()
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -45,10 +38,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Reddit Image/GIF Viewer", lifespan=lifespan)
-
-if download_router:
-    app.include_router(download_router)
-
+app.include_router(download_router)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 if os.getenv("TESTING") != "1":
@@ -59,8 +49,7 @@ if os.getenv("TESTING") != "1":
 async def add_security_headers(request: Request, call_next):
     start_time = time.time()
     response = await call_next(request)
-    process_time = time.time() - start_time
-    response.headers["X-Process-Time"] = str(process_time)
+    response.headers["X-Process-Time"] = str(time.time() - start_time)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
@@ -75,39 +64,48 @@ reddit = initialize_reddit_client(client_id, client_secret)
 templates = Jinja2Templates(directory="templates")
 
 
-def normalize_redgifs_item_url(media_url: str) -> str:
-    """Map Redgifs URLs to canonical MP4 URLs with caching."""
-    if not media_url or "redgifs.com" not in media_url.lower():
-        return media_url
-    out = canonical_redgifs_mp4_url(media_url)
-    if out == media_url:
-        return media_url
-    cache_key = f"redgifs_mp4:{media_url}"
+async def _resolve_redgifs_play_url(url: str, session) -> str:
+    """Resolve case-correct Redgifs MP4 URL via watch page, with cache."""
+    cache_key = f"redgifs_resolved:{url.strip().lower()}"
     cached = cache.get(cache_key)
-    if cached is not None:
+    if cached:
         return cached
-    cache.set(cache_key, out, REDGIFS_URL_TTL)
-    return out
 
-
-def _extract_post_with_normalizer(post):
-    return extract_media_from_post(post, normalize_redgifs_item_url)
+    resolved = await fetch_redgifs_mp4_from_watch_page(url, session)
+    if resolved:
+        cache.set(cache_key, resolved, REDGIFS_URL_TTL)
+        return resolved
+    return url
 
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
     return JSONResponse({
         "status": "healthy",
         "cache_stats": cache.get_stats(),
     })
 
 
+@app.get("/api/resolve-redgifs")
+async def resolve_redgifs(url: str):
+    if not url or "redgifs.com" not in url.lower():
+        return JSONResponse({"error": "Only Redgifs URLs are allowed"}, status_code=400)
+
+    session = await get_http_session()
+    resolved = await _resolve_redgifs_play_url(url, session)
+    watch_id = extract_redgifs_id(resolved or url)
+    if not watch_id:
+        return JSONResponse({"error": "Could not parse Redgifs URL"}, status_code=400)
+
+    return JSONResponse({
+        "url": resolved,
+        "watch_id": watch_id,
+        "embed_url": f"https://www.redgifs.com/ifr/{watch_id.lower()}",
+    })
+
+
 @app.get("/api/proxy-video")
 async def proxy_video(request: Request, url: str):
-    """Proxy video requests with proper headers to bypass CORS/403 restrictions."""
-    from urllib.parse import urlparse
-
     parsed_url = urlparse(url)
     if "redgifs.com" not in parsed_url.netloc.lower():
         return JSONResponse({"error": "Only Redgifs URLs are allowed"}, status_code=400)
@@ -131,12 +129,18 @@ async def proxy_video(request: Request, url: str):
         if range_header:
             headers["Range"] = range_header
 
+        original_url = url.strip()
+        url = await _resolve_redgifs_play_url(original_url, session)
         upstream = await session.get(url, headers=headers, allow_redirects=True)
-        if upstream.status == 403 and "media.redgifs.com" in url.lower():
+        content_type = (upstream.headers.get("Content-Type") or "").lower()
+        if upstream.status in (403, 404) or (
+            upstream.status in (200, 206) and content_type and not content_type.startswith("video/")
+        ):
             resolved = await fetch_redgifs_mp4_from_watch_page(url, session)
             if resolved and resolved != url:
                 upstream.release()
                 url = resolved
+                cache.set(f"redgifs_resolved:{original_url.lower()}", resolved, REDGIFS_URL_TTL)
                 upstream = await session.get(url, headers=headers, allow_redirects=True)
 
         if upstream.status not in (200, 206):
@@ -177,13 +181,11 @@ async def proxy_video(request: Request, url: str):
 
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
-    """Main page."""
     return templates.TemplateResponse("index.html", {"request": request})
 
 
 @app.get("/api/search-subreddits")
 async def search_subreddits_endpoint(q: str):
-    """Search for subreddits matching the query."""
     try:
         if not q or len(q) < 1:
             return JSONResponse({"success": True, "results": []})
@@ -220,7 +222,6 @@ async def scrape_reddit(
     sort: str = Form("hot"),
     time_filter: str = Form("all"),
 ):
-    """Scrape Reddit for images and GIFs."""
     try:
         from app.models.schemas import ScrapeRequest
 
@@ -266,14 +267,12 @@ async def scrape_reddit(
             request_data.after,
             request_data.sort,
             request_data.time_filter,
-            _extract_post_with_normalizer,
         )
 
         response_data = {
             "success": True,
             "items": media_items,
             "count": len(media_items),
-            "total": len(media_items),
             "after": next_after,
             "has_more": next_after is not None,
         }

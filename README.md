@@ -12,12 +12,11 @@ A fast and lightweight web application for browsing images and GIFs from Reddit 
 - 🌙 **Dark Mode**: Toggle between light and dark themes
 
 ### Enhanced Features
-- ⬇️ **Download Support**: Download individual files or batch download as ZIP
+- ⬇️ **Download Support**: Download individual media files
 - ⭐ **Favorites**: Save your favorite media items
 - 📋 **Copy URLs**: Quick copy-to-clipboard functionality
 - 🔗 **Direct Links**: Open media in Reddit with one click
 - ℹ️ **Media Info**: View dimensions, source, and metadata
-- 📊 **Progress Indicators**: Real-time loading progress
 - 🔄 **Error Handling**: User-friendly error messages with retry options
 - 💾 **Caching**: Fast response times with intelligent caching
 
