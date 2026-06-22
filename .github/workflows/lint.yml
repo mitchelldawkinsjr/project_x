@@ -19,4 +19,4 @@ jobs:
     - name: Install dependencies
       run: pip install -r requirements-dev.txt
     - name: Run linting
-      run: pylint app/ tests/
+      run: pylint app/ tests/ --fail-under=8.0
